@@ -1,0 +1,13 @@
+KD_NR,ANREDE,NAME1,NAME2,VKZ,EMAIL,TELEFON,GEB_DATUM,WERBUNG_OK,ANGELEGT_AM
+100001,H,Müller GmbH,,F,max.mueller@acme.example,+49 89 123 4567,NULL,N,2025-01-15 09:30:00
+100002,F,Schmidt,Anne,P,anne.schmidt@acme.example;,1989-03-22,2018-05-10 14:22:00,J,2018-05-10 14:22:00
+100003,H,Becker,Klaus,P,klaus.becker@acme.example,089/12 34 56-0,1975-11-08,N,2019-02-28 11:15:00
+100004,X,Müller & Weber Ehegatten,,P,mueller.weber@acme.example,+49 (89) 9876543,1958-06-15,J,2003-07-22 10:00:00
+100005,D,Nguyen,Sam,P,sam.nguyen@example.de,08912345678,1992-09-30,NULL,2022-11-01 16:45:00
+100006,NULL,Handelshaus Krüger,,F,trading@krueger.de,089 5555 5555,NULL,J,2015-08-19 08:00:00
+100007,H,Wagner,Thomas,P,thomas.wagner@company.com,09111223344,1980-12-10,N,2020-03-17 13:20:00
+100008,F,Hoffmann,Petra,P,petra.hoffmann@example.org;,1971-05-03,2021-06-25 09:00:00,J,2021-06-25 09:00:00
+100009,X,Hartmann Eheleute,,P,hartmann.fam@acme.example,+49-89-445566-77,1965-04-21,N,2005-11-11 12:30:00
+100010,H,Zimmermann AG,,F,kontakt@zimmermann-ag.de,+49 821 5555 555,NULL,N,2017-09-05 10:15:00
+100011,D,Costa,Andrea,P,andrea@hotmail.com,089-123-456,1988-07-14,J,2023-02-14 15:30:00
+100012,F,Rossi,Maria,P,maria.rossi@gmail.com;,1976-01-28,2019-12-12 11:22:00,NULL,2019-12-12 11:22:00

@@ -1,0 +1,30 @@
+schema atlas_kunden {
+  KD_NR        INT          (pk, required)
+  ANREDE       CHAR(1)     
+  NAME1        VARCHAR(60) 
+  NAME2        VARCHAR(60)  
+  VKZ          CHAR(1)     
+  EMAIL        VARCHAR(120) 
+  GEB_DATUM    DATE         
+  WERBUNG_OK   CHAR(1)      
+  ANGELEGT_AM  TIMESTAMP   
+}
+
+schema sf_contact {
+  Email STRING(80) 
+  FirstName   STRING(40)
+  LastName    STRING(80)   (required)
+  Salutation  PICKLIST   
+  Phone       STRING(40)   
+  HasOptedOutOfEmail BOOLEAN 
+}
+
+mapping kunden_to_contact {
+    source {atlas_kunden}
+    target {sf_contact}
+
+    EMAIL -> Email
+    NAME1 -> FirstName
+    NAME2 -> LastName
+    WERBUNG_OK -> HasOptedOutOfEmail
+}

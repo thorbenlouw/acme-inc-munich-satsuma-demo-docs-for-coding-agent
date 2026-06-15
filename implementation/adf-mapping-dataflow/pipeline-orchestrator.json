@@ -1,0 +1,233 @@
+{
+  "name": "BillingToAssets_Pipeline",
+  "properties": {
+    "description": "Orchestrator pipeline for billing_api_customer -> sf_asset mapping. Handles validation, error routing, and monitoring.",
+    "activities": [
+      {
+        "name": "ValidateInputs",
+        "type": "Validation",
+        "dependsOn": [],
+        "userProperties": [],
+        "typeProperties": {
+          "dataset": {
+            "referenceName": "BillingApiCustomer_JSON",
+            "type": "DatasetReference"
+          },
+          "timeout": "0.00:05:00",
+          "sleep": 10,
+          "minimumSize": 1024,
+          "childItems": true
+        },
+        "description": "Validate billing API dataset is accessible and non-empty"
+      },
+      {
+        "name": "ValidateKdRefCrosswalk",
+        "type": "Validation",
+        "dependsOn": [
+          {
+            "activity": "ValidateInputs",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "userProperties": [],
+        "typeProperties": {
+          "dataset": {
+            "referenceName": "AtlasKundenKdRef_CSV",
+            "type": "DatasetReference"
+          },
+          "timeout": "0.00:05:00",
+          "sleep": 10,
+          "minimumSize": 512
+        },
+        "description": "Validate KD-REF crosswalk is accessible"
+      },
+      {
+        "name": "ExecuteBillingToAssetsMappingDataFlow",
+        "type": "ExecuteDataFlow",
+        "dependsOn": [
+          {
+            "activity": "ValidateKdRefCrosswalk",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "userProperties": [],
+        "typeProperties": {
+          "dataflow": {
+            "referenceName": "BillingToAssets",
+            "type": "DataFlowReference"
+          },
+          "staging": {
+            "linkedService": {
+              "referenceName": "AzureBlobStorageLinkedService",
+              "type": "LinkedServiceReference"
+            },
+            "folderPath": "adf-staging/billing-to-assets"
+          },
+          "integrationRuntime": {
+            "referenceName": "AutoResolveIntegrationRuntime",
+            "type": "IntegrationRuntimeReference"
+          },
+          "traceLevel": "Fine",
+          "runConcurrently": false,
+          "computeType": "General",
+          "coreCount": 8,
+          "timeToLive": 60
+        },
+        "description": "Run the Satsuma billing_to_assets mapping DataFlow"
+      },
+      {
+        "name": "LogSuccessMetrics",
+        "type": "SqlQuery",
+        "dependsOn": [
+          {
+            "activity": "ExecuteBillingToAssetsMappingDataFlow",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "userProperties": [],
+        "typeProperties": {
+          "queryTimeout": "00:30:00",
+          "queries": [
+            {
+              "value": "INSERT INTO dbo.pipeline_metrics (pipeline_name, run_date, records_processed, records_sunk, orphan_count, duration_ms, status) VALUES ('BillingToAssets', GETDATE(), @{activity('ExecuteBillingToAssetsMappingDataFlow').output.sourceRecords}, @{activity('ExecuteBillingToAssetsMappingDataFlow').output.sinkRecords[0]}, @{activity('ExecuteBillingToAssetsMappingDataFlow').output.sinkRecords[1]}, @{activity('ExecuteBillingToAssetsMappingDataFlow').output.executionDuration}, 'SUCCESS')",
+              "type": "NonQuery"
+            }
+          ],
+          "linkedServiceName": {
+            "referenceName": "AzureSqlDatabaseLinkedService",
+            "type": "LinkedServiceReference"
+          }
+        },
+        "description": "Log successful run metrics to audit table"
+      },
+      {
+        "name": "CheckOrphanRate",
+        "type": "If",
+        "dependsOn": [
+          {
+            "activity": "LogSuccessMetrics",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "userProperties": [],
+        "typeProperties": {
+          "expression": {
+            "value": "@greater(div(int(activity('ExecuteBillingToAssetsMappingDataFlow').output.sinkRecords[1]), int(activity('ExecuteBillingToAssetsMappingDataFlow').output.sourceRecords)), 0.005)",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "name": "AlertHighOrphanRate",
+              "type": "WebActivity",
+              "dependsOn": [],
+              "userProperties": [],
+              "typeProperties": {
+                "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+                "method": "POST",
+                "headers": {
+                  "Content-Type": "application/json"
+                },
+                "body": {
+                  "value": "@json(concat('{\"text\": \"⚠️ BillingToAssets: Orphan rate > 0.5% (THRESHOLD). ', activity('ExecuteBillingToAssetsMappingDataFlow').output.sinkRecords[1], ' orphans / ', activity('ExecuteBillingToAssetsMappingDataFlow').output.sourceRecords, ' total. Investigate KD-REF crosswalk. Pipeline: ', pipeline().RunId, '\"}'))",
+                  "type": "Expression"
+                }
+              },
+              "description": "Send Slack alert if orphan rate exceeds 0.5%"
+            },
+            {
+              "name": "EscalateToDataOps",
+              "type": "SendEmail",
+              "dependsOn": [
+                {
+                  "activity": "AlertHighOrphanRate",
+                  "dependencyConditions": ["Succeeded"]
+                }
+              ],
+              "userProperties": [],
+              "typeProperties": {
+                "emailAddress": "data-ops@acme.example",
+                "subject": "URGENT: BillingToAssets Orphan Rate High",
+                "message": "@concat('Orphan rate exceeded threshold (0.5%). Run ID: ', pipeline().RunId, '. Check Azure Data Factory activity run logs.')"
+              },
+              "description": "Email data ops team on high orphan rate"
+            }
+          ],
+          "ifFalseActivities": [
+            {
+              "name": "OrphanRateNormal",
+              "type": "AppendVariable",
+              "dependsOn": [],
+              "userProperties": [],
+              "typeProperties": {
+                "variableName": "pipelineStatus",
+                "value": "SUCCESS_LOW_ORPHAN_RATE"
+              },
+              "description": "Orphan rate is within acceptable tolerance"
+            }
+          ]
+        },
+        "description": "Check if orphan rate exceeds 0.5% threshold; escalate if true"
+      },
+      {
+        "name": "HandleDataFlowFailure",
+        "type": "WebActivity",
+        "dependsOn": [
+          {
+            "activity": "ExecuteBillingToAssetsMappingDataFlow",
+            "dependencyConditions": ["Failed"]
+          }
+        ],
+        "userProperties": [],
+        "typeProperties": {
+          "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+          "method": "POST",
+          "body": {
+            "value": "@json(concat('{\"text\": \"❌ BillingToAssets DataFlow FAILED. Run ID: ', pipeline().RunId, '. Check activity run details in Azure Data Factory. Error: @{activity(''ExecuteBillingToAssetsMappingDataFlow'').Error}\"}'))",
+            "type": "Expression"
+          }
+        },
+        "description": "Alert on DataFlow failure"
+      },
+      {
+        "name": "HandleValidationFailure",
+        "type": "WebActivity",
+        "dependsOn": [
+          {
+            "activity": "ValidateInputs",
+            "dependencyConditions": ["Failed"]
+          }
+        ],
+        "userProperties": [],
+        "typeProperties": {
+          "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+          "method": "POST",
+          "body": {
+            "value": "@json(concat('{\"text\": \"⚠️ BillingToAssets: Input validation FAILED. Billing API dataset may be unavailable or empty. Run ID: ', pipeline().RunId, '\"}'))",
+            "type": "Expression"
+          }
+        },
+        "description": "Alert on input validation failure"
+      }
+    ],
+    "parameters": {
+      "sourceDatasetPath": {
+        "type": "string",
+        "defaultValue": "billing-exports"
+      }
+    },
+    "variables": {
+      "pipelineStatus": {
+        "type": "String"
+      }
+    },
+    "folder": {
+      "name": "Billing"
+    },
+    "annotations": [
+      "billing",
+      "assets",
+      "salesforce",
+      "satsuma-mapping"
+    ]
+  }
+}

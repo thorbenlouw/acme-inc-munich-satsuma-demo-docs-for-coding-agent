@@ -1,0 +1,133 @@
+[
+  {
+    "customer_ref": "100001",
+    "payment_status": "ok",
+    "subscriptions": [
+      {
+        "contract_no": "CTR-2025-001-01",
+        "product_code": "SaaS-Pro",
+        "mrr_eur": 2500.00,
+        "started_on": "2025-01-15",
+        "cancelled_on": null
+      },
+      {
+        "contract_no": "CTR-2025-001-02",
+        "product_code": "Support-Prem",
+        "mrr_eur": 500.00,
+        "started_on": "2025-01-15",
+        "cancelled_on": null
+      }
+    ]
+  },
+  {
+    "customer_ref": "100002",
+    "payment_status": "ok",
+    "subscriptions": [
+      {
+        "contract_no": "CTR-2018-002-01",
+        "product_code": "SaaS-Basic",
+        "mrr_eur": 1200.00,
+        "started_on": "2018-05-10",
+        "cancelled_on": null
+      }
+    ]
+  },
+  {
+    "customer_ref": "100003",
+    "payment_status": "dunning_1",
+    "subscriptions": [
+      {
+        "contract_no": "CTR-2019-003-01",
+        "product_code": "SaaS-Pro",
+        "mrr_eur": 2500.00,
+        "started_on": "2019-02-28",
+        "cancelled_on": null
+      }
+    ]
+  },
+  {
+    "customer_ref": "100004",
+    "payment_status": "ok",
+    "subscriptions": [
+      {
+        "contract_no": "CTR-2003-004-01",
+        "product_code": "SaaS-Basic",
+        "mrr_eur": 800.00,
+        "started_on": "2003-07-22",
+        "cancelled_on": "2024-06-30"
+      },
+      {
+        "contract_no": "CTR-2024-004-02",
+        "product_code": "SaaS-Pro",
+        "mrr_eur": 2500.00,
+        "started_on": "2024-07-01",
+        "cancelled_on": null
+      }
+    ]
+  },
+  {
+    "customer_ref": "100005",
+    "payment_status": "ok",
+    "subscriptions": [
+      {
+        "contract_no": "CTR-2022-005-01",
+        "product_code": "SaaS-Pro",
+        "mrr_eur": 2500.00,
+        "started_on": "2022-11-01",
+        "cancelled_on": null
+      }
+    ]
+  },
+  {
+    "customer_ref": "100006",
+    "payment_status": "legal",
+    "subscriptions": [
+      {
+        "contract_no": "CTR-2015-006-01",
+        "product_code": "SaaS-Enterprise",
+        "mrr_eur": 5000.00,
+        "started_on": "2015-08-19",
+        "cancelled_on": "2025-03-31"
+      }
+    ]
+  },
+  {
+    "customer_ref": "100007",
+    "payment_status": "ok",
+    "subscriptions": [
+      {
+        "contract_no": "CTR-2020-007-01",
+        "product_code": "SaaS-Basic",
+        "mrr_eur": 1200.00,
+        "started_on": "2020-03-17",
+        "cancelled_on": null
+      }
+    ]
+  },
+  {
+    "customer_ref": "100009",
+    "payment_status": "ok",
+    "subscriptions": [
+      {
+        "contract_no": "CTR-2005-009-01",
+        "product_code": "SaaS-Basic",
+        "mrr_eur": 1200.00,
+        "started_on": "2005-11-11",
+        "cancelled_on": null
+      }
+    ]
+  },
+  {
+    "customer_ref": "100011",
+    "payment_status": "dunning_2",
+    "subscriptions": [
+      {
+        "contract_no": "CTR-2023-011-01",
+        "product_code": "SaaS-Pro",
+        "mrr_eur": 2500.00,
+        "started_on": "2023-02-14",
+        "cancelled_on": null
+      }
+    ]
+  }
+]

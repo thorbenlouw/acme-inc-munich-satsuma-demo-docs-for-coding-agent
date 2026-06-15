@@ -1,0 +1,94 @@
+specification {
+  element actor {
+    style { shape person }
+  }
+  element system
+  element store
+  element api
+  element component
+
+  tag pii
+  tag phase1
+  tag out-of-scope
+}
+
+model {
+  sabine = actor 'Sabine (BA / Sales Ops)' {
+    description 'Owns source-to-target knowledge; resolves open questions.'
+  }
+  weber = actor 'Dr. Weber (DPO)' {
+    description 'Reviews PII, retention, consent; signs the Art. 30 record.'
+  }
+
+  acme = system 'Acme Inc Estate' {
+
+    atlas = store 'ATLAS' {
+      #pii #phase1
+      description '
+        PostgreSQL OLTP, since 1998. System of record for customers and sales.
+        German schema (KUNDEN, AUFTRAEGE, ANSPRECHPARTNER). ~331k customers.
+      '
+      technology 'PostgreSQL 12'
+    }
+
+    billing = api 'Billing Platform API' {
+      #phase1
+      description 'Subscriptions, MRR, dunning status. REST/JSON. Single currency (EUR).'
+      technology 'REST'
+    }
+
+    support = api 'Support Platform API' {
+      #out-of-scope
+      description 'Tickets. Phase 3 — not analysed in this discovery.'
+    }
+
+    crosswalk = store 'KD-REF Crosswalk' {
+      #phase1
+      description 'Maps ATLAS KD_NR <-> billing customer_ref. ~0.4% orphan refs route to remediation.'
+    }
+
+    pipeline = system 'Migration Pipeline' {
+      #phase1
+      description '
+        Reads sources, applies the Satsuma-specified mapping, loads Salesforce.
+        Generated from the spec; never improvised against the spreadsheet.
+      '
+
+      profiler = component 'Metadata Profiler' {
+        description 'Deterministic. Emits DDL + column statistics only — no customer rows leave the network.'
+      }
+      spec = component 'Satsuma Workspace' {
+        #pii
+        description 'schemas + mappings + governance. The reviewed, machine-checkable specification.'
+      }
+    }
+  }
+
+  salesforce = system 'Salesforce Sales Cloud' {
+    #pii #phase1
+    description 'Target. Customer 360: Account / Contact / Asset.'
+  }
+
+  // --- relationships ---
+  sabine -> atlas 'operates daily'
+  atlas -> pipeline.profiler 'DDL + aggregates'
+  billing -> pipeline.profiler 'JSON schema'
+  pipeline.profiler -> pipeline.spec 'agent drafts, human signs'
+  pipeline.spec -> salesforce 'generates load for'
+  crosswalk -> pipeline.spec 'join policy recorded in spec'
+  weber -> pipeline.spec 'reviews PII + retention'
+}
+
+views {
+  view landscape {
+    title 'Customer 360 — landscape'
+    include *
+  }
+
+  view phase1 {
+    title 'Phase 1 only'
+    include
+      element.tag = #phase1,
+      sabine, weber
+  }
+}

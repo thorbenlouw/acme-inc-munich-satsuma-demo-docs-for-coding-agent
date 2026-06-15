@@ -1,0 +1,359 @@
+{
+  "datasets": [
+    {
+      "name": "BillingApiCustomer_JSON",
+      "properties": {
+        "linkedServiceName": {
+          "referenceName": "BillingPlatformRestAPI",
+          "type": "LinkedServiceReference"
+        },
+        "type": "Json",
+        "typeProperties": {
+          "location": {
+            "type": "AzureCosmosDbApiLocation",
+            "collectionName": "customers"
+          }
+        },
+        "schema": [
+          {
+            "name": "customer_ref",
+            "type": "string"
+          },
+          {
+            "name": "payment_status",
+            "type": "string",
+            "metadata": {
+              "enum": ["ok", "dunning_1", "dunning_2", "legal"]
+            }
+          },
+          {
+            "name": "subscriptions",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "contract_no": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "PK in billing system; maps to sf_asset.SerialNumber"
+                  }
+                },
+                "product_code": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Lookup to Product2; resolve via Product_Code__c crosswalk"
+                  }
+                },
+                "mrr_eur": {
+                  "type": "number",
+                  "metadata": {
+                    "description": "Monthly Recurring Revenue in EUR. SF field: MRR__c (EUR only; org currency must match billing platform)"
+                  }
+                },
+                "started_on": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "cancelled_on": {
+                  "type": "string",
+                  "format": "date",
+                  "metadata": {
+                    "description": "null while active. Maps to sf_asset.UsageEndDate; determines Status (Active/Cancelled)"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "metadata": {
+          "description": "GET /v2/customers/{id} from billing platform. Nested structure with subscriptions as list_of record.",
+          "satsuma_schema": "billing_api_customer"
+        }
+      }
+    },
+    {
+      "name": "AtlasKundenKdRef_CSV",
+      "properties": {
+        "linkedServiceName": {
+          "referenceName": "AzureBlobStorageLinkedService",
+          "type": "LinkedServiceReference"
+        },
+        "type": "DelimitedText",
+        "typeProperties": {
+          "location": {
+            "type": "AzureBlobStorageLocation",
+            "fileName": "kd_ref_crosswalk.csv",
+            "folderPath": "crosswalks"
+          },
+          "columnDelimiter": ",",
+          "escapeChar": "\\",
+          "firstRowAsHeader": true,
+          "quoteChar": "\""
+        },
+        "schema": [
+          {
+            "name": "customer_ref",
+            "type": "string",
+            "metadata": {
+              "description": "Billing platform customer reference (e.g., KD-100247)"
+            }
+          },
+          {
+            "name": "kd_nr",
+            "type": "integer",
+            "metadata": {
+              "description": "ATLAS Kunden PK (e.g., 100247). Links to sf_account or sf_contact parent."
+            }
+          }
+        ],
+        "metadata": {
+          "description": "Crosswalk: billing.customer_ref -> atlas.KD_NR. Maintained by data ops; updated daily.",
+          "notes": "~0.4% of refs are orphans (no match). Route to remediation queue."
+        }
+      }
+    },
+    {
+      "name": "SfAsset_Salesforce",
+      "properties": {
+        "linkedServiceName": {
+          "referenceName": "SalesforceLinkedService",
+          "type": "LinkedServiceReference"
+        },
+        "type": "SalesforceObject",
+        "typeProperties": {
+          "objectApiName": "Asset",
+          "metadata": {
+            "description": "Salesforce Asset object. One record per billing subscription.",
+            "satsuma_schema": "sf_asset",
+            "satsuma_mapping": "billing to assets (target)"
+          }
+        },
+        "schema": [
+          {
+            "name": "Id",
+            "type": "string",
+            "metadata": {
+              "constraint": "pk"
+            }
+          },
+          {
+            "name": "Name",
+            "type": "string",
+            "metadata": {
+              "constraint": "required",
+              "note": "SF requires Name; derive from product + contract no (e.g., 'PROD-E001-SUB-2020-001')"
+            }
+          },
+          {
+            "name": "AccountId",
+            "type": "string",
+            "metadata": {
+              "constraint": "ref sf_account.Id",
+              "description": "SF requires Account or Contact parent. Derived from KD_NR via ATLAS->SF Account mapping."
+            }
+          },
+          {
+            "name": "ContactId",
+            "type": "string",
+            "metadata": {
+              "constraint": "ref sf_contact.Id",
+              "description": "Optional parent for person accounts (VKZ='P')"
+            }
+          },
+          {
+            "name": "Product2Id",
+            "type": "string",
+            "metadata": {
+              "description": "Lookup to Product2; resolve via Product_Code__c crosswalk"
+            }
+          },
+          {
+            "name": "SerialNumber",
+            "type": "string",
+            "metadata": {
+              "source_field": "billing_api_customer.subscriptions[].contract_no",
+              "description": "Contract number from billing platform (PK for subscription)"
+            }
+          },
+          {
+            "name": "Status",
+            "type": "string",
+            "metadata": {
+              "enum": ["Active", "Cancelled"],
+              "note": "Org overrides standard Shipped/Installed/... values with billing lifecycle states",
+              "derivation": "IF cancelled_on IS NULL THEN 'Active' ELSE 'Cancelled'"
+            }
+          },
+          {
+            "name": "PurchaseDate",
+            "type": "date",
+            "metadata": {
+              "source_field": "billing_api_customer.subscriptions[].started_on"
+            }
+          },
+          {
+            "name": "UsageEndDate",
+            "type": "date",
+            "metadata": {
+              "source_field": "billing_api_customer.subscriptions[].cancelled_on",
+              "description": "Set from cancelled_on when subscription ends"
+            }
+          },
+          {
+            "name": "Price",
+            "type": "number",
+            "metadata": {
+              "source_field": "billing_api_customer.subscriptions[].mrr_eur",
+              "precision": 18,
+              "scale": 2
+            }
+          },
+          {
+            "name": "Quantity",
+            "type": "number",
+            "metadata": {
+              "source_field": "billing_api_customer.subscriptions[].mrr_eur (implied: 1 subscription = 1 quantity)"
+            }
+          },
+          {
+            "name": "Product_Code__c",
+            "type": "string",
+            "metadata": {
+              "source_field": "billing_api_customer.subscriptions[].product_code",
+              "description": "Custom field; must exist on Asset object"
+            }
+          },
+          {
+            "name": "MRR__c",
+            "type": "decimal",
+            "metadata": {
+              "source_field": "billing_api_customer.subscriptions[].mrr_eur",
+              "precision": 10,
+              "scale": 2,
+              "note": "EUR only; org currency must match billing platform. If mismatch, flag for manual review."
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "OrphanRemediationQueue_Parquet",
+      "properties": {
+        "linkedServiceName": {
+          "referenceName": "AzureBlobStorageLinkedService",
+          "type": "LinkedServiceReference"
+        },
+        "type": "Parquet",
+        "typeProperties": {
+          "location": {
+            "type": "AzureBlobStorageLocation",
+            "fileName": "orphan_remediation_{timestamp}.parquet",
+            "folderPath": "remediation-queues/billing-to-assets",
+            "container": "data-factory"
+          },
+          "compressionCodec": "snappy",
+          "metadata": {
+            "description": "Orphaned billing records (~0.4%) that failed KD-REF join. Route to manual review queue.",
+            "sla": "Resolve within 5 business days; escalate if > 10 records per day"
+          }
+        },
+        "schema": [
+          {
+            "name": "customer_ref",
+            "type": "string",
+            "metadata": {
+              "description": "Billing customer ref with no match in KD-REF crosswalk"
+            }
+          },
+          {
+            "name": "payment_status",
+            "type": "string"
+          },
+          {
+            "name": "contract_no",
+            "type": "string"
+          },
+          {
+            "name": "product_code",
+            "type": "string"
+          },
+          {
+            "name": "mrr_eur",
+            "type": "decimal"
+          },
+          {
+            "name": "started_on",
+            "type": "date"
+          },
+          {
+            "name": "cancelled_on",
+            "type": "date"
+          },
+          {
+            "name": "error_reason",
+            "type": "string",
+            "metadata": {
+              "description": "Human-readable reason for orphaning (e.g., 'KD-REF join failed: no match for customer_ref=KD-999999')"
+            }
+          },
+          {
+            "name": "processed_timestamp",
+            "type": "timestamp",
+            "metadata": {
+              "description": "When this record entered remediation queue"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "linkedServices": [
+    {
+      "name": "BillingPlatformRestAPI",
+      "type": "HttpServer",
+      "description": "Billing platform API (GET /v2/customers/{id})",
+      "typeProperties": {
+        "url": "@{linkedService().billingApiBaseUrl}",
+        "authenticationType": "OAuth2ClientCredential",
+        "clientId": "@{linkedService().billingApiClientId}",
+        "clientSecret": {
+          "type": "SecureString",
+          "value": "@{linkedService().billingApiClientSecret}"
+        },
+        "tokenEndpoint": "@{linkedService().billingApiTokenEndpoint}"
+      },
+      "connectVia": {
+        "referenceName": "AutoResolveIntegrationRuntime",
+        "type": "IntegrationRuntimeReference"
+      }
+    },
+    {
+      "name": "AzureBlobStorageLinkedService",
+      "type": "AzureBlobStorage",
+      "description": "Azure Blob Storage for crosswalks and remediation queues",
+      "typeProperties": {
+        "connectionString": {
+          "type": "SecureString",
+          "value": "@{linkedService().storageConnectionString}"
+        }
+      }
+    },
+    {
+      "name": "SalesforceLinkedService",
+      "type": "Salesforce",
+      "description": "Salesforce org for Asset object writes",
+      "typeProperties": {
+        "environmentUrl": "@{linkedService().sfInstanceUrl}",
+        "username": "@{linkedService().sfUsername}",
+        "password": {
+          "type": "SecureString",
+          "value": "@{linkedService().sfPassword}"
+        },
+        "securityToken": {
+          "type": "SecureString",
+          "value": "@{linkedService().sfSecurityToken}"
+        }
+      }
+    }
+  ]
+}

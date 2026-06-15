@@ -1,0 +1,345 @@
+note {
+  """
+  ACME Inc München — Customer Migration Spec
+  Reverse-engineered from: Customer_Migration_Mapping_v17_FINAL_(2).xlsx
+  Source: ATLAS legacy system (operational since 1998)
+  Targets: Salesforce (Account, Contact, Opportunity, Asset), Billing API cross-reference
+
+  Scope:
+    - KUNDEN       → sf_account + sf_contact (primary contact per customer)
+    - ANSPRECHPARTNER → sf_contact (additional contacts, linked to account)
+    - AUFTRAEGE    → sf_opportunity (scope of pre-2015 history TBC — see open issues)
+    - Billing API  → sf_asset (one Asset per active subscription)
+
+  Exclusions (confirmed):
+    - IBAN / BIC: NOT migrating — remain in billing system only (security boundary)
+    - NOTIZ1–5: NOT migrating pending DSGVO review; health data found in free-text fields
+    - GEB_DATUM: NOT migrating — DSGVO compliance decision pending 2026-06-19
+
+  Version note: v17_FINAL_(2).xlsx is the authoritative version per Sabine.
+  """
+}
+
+// ──────────────────────────────────────────────
+// SOURCE SCHEMAS
+// ──────────────────────────────────────────────
+
+schema atlas_kunden (note "ATLAS customer master — ~530k records; foundation since 1998") {
+  KD_NR           INT              (pk, unique, indexed, note "Customer number — becomes Salesforce external ID crosswalk")
+  ANREDE          CHAR(1)          (enum {H, F, D, X}, note "H=Herr F=Frau D=Divers (since 2019) X=unknown")
+  //! 312 records have ANREDE='X'; Gerhard who defined this code has retired — meaning unresolved
+  NAME1           STRING(100)      (required, note "Primary name line; company name for business accounts")
+  NAME2           STRING(100)      (note "Secondary name line or legal suffix")
+  STRASSE         STRING(100)      (note "Street address")
+  PLZ             CHAR(10)         (note "Postal code")
+  ORT             STRING(100)      (note "City")
+  LAND            CHAR(2)          (enum {D, A, CH, NL, F, GB, EU}, note "Legacy single-char country codes; EU=unclear (7 records)")
+  //? LAND='EU' appears on 7 records — country meaning unknown; cannot map to ISO without clarification
+  EMAIL           STRING(255)      (pii, format email)
+  //! 4.1% of EMAIL values fail RFC validation; many have trailing semicolons requiring cleanup
+  TELEFON         STRING(50)       (pii, note "19 distinct formats detected — requires E.164 normalisation; ~2% may need manual review")
+  GEB_DATUM       DATE             (pii, note "Date of birth — NOT migrating; DSGVO decision pending 2026-06-19")
+  WERBUNG_OK      CHAR(1)          (enum {J, N}, note "Marketing opt-in; J=opt-in N=opt-out empty=opt-out")
+  //! Logic is INVERTED relative to Salesforce HasOptedOutOfEmail: J→false N/empty→true; previous test failures recorded
+  IBAN            STRING(34)       (pii, encrypt, note "NOT migrating — stays in billing system")
+  BIC             STRING(11)       (note "NOT migrating — stays in billing system")
+  GELOESCHT_KZ    CHAR(1)          (note "Deletion flag; records with GELOESCHT_KZ='J' are excluded (~28,000)")
+  NOTIZ1          STRING(500)      (pii, note "Free-text notes — NOT migrating; DSGVO review pending; health data found")
+  NOTIZ2          STRING(500)      (pii)
+  NOTIZ3          STRING(500)      (pii)
+  NOTIZ4          STRING(500)      (pii)
+  NOTIZ5          STRING(500)      (pii)
+  //! NOTIZ1–5: health and private data confirmed in spot-check — must NOT migrate without explicit DSGVO clearance
+  BRANCHE         STRING(20)       (note "Industry code — 84 legacy values vs 32 Salesforce Industry picklist values")
+  //! Branchen_Mapping_FINAL_v3.xlsx is LOST — industry code crosswalk must be rebuilt from scratch
+  kunden_adr      list_of record   (note "Delivery addresses — 1:n relationship; target model TBD") {
+    ADR_NR        INT              (pk)
+    ADR_STRASSE   STRING(100)
+    ADR_PLZ       CHAR(10)
+    ADR_ORT       STRING(100)
+    ADR_LAND      CHAR(2)
+  }
+  //? Multiple delivery addresses (1:n): no target model agreed yet — Salesforce standard address vs custom object
+}
+
+schema atlas_ansprechpartner (note "ATLAS contact persons — 102,557 records; linked to KUNDEN via KD_NR") {
+  AP_NR           INT              (pk, unique, indexed, note "Contact person number")
+  KD_NR           INT              (indexed, ref atlas_kunden.KD_NR, note "Parent customer")
+  VORNAME         STRING(100)      (pii)
+  NACHNAME        STRING(100)      (pii, note "Maps to Contact.LastName — mandatory in Salesforce")
+  //! 211 records have empty NACHNAME — Salesforce will reject; default strategy TBD
+  FUNKTION        STRING(100)      (note "Job title / function")
+  ABTEILUNG       STRING(100)      (note "Department")
+  EMAIL           STRING(255)      (pii, format email)
+  TELEFON         STRING(50)       (pii)
+  NEWSLETTER_KZ   CHAR(1)          (enum {J, N}, note "Newsletter opt-in; same inverted logic as WERBUNG_OK")
+  AUSGESCHIEDEN_KZ CHAR(1)         (note "Left-the-company flag")
+  //? AUSGESCHIEDEN_KZ: sales team wants historical contacts kept; DSGVO says contacts of ex-employees must be deleted — escalation needed
+}
+
+schema atlas_auftraege (note "ATLAS orders — 2.4M rows total; migration scope under review by steering committee") {
+  AUF_NR          STRING(20)       (pk, unique, indexed, note "Order number → Salesforce external ID")
+  KD_NR           INT              (indexed, ref atlas_kunden.KD_NR)
+  AUF_DATUM       DATE             (note "Order date; pre-2002 records were in DM currency era")
+  WAEHRUNG        CHAR(3)          (enum {EUR, DEM}, note "Currency; DEM = Deutsche Mark pre-2002")
+  //! 184,220 records in DEM — no conversion rate stored; Amount field will be incorrect without FX crosswalk
+  GESAMT_NETTO    DECIMAL(15, 2)   (note "Net order total")
+  STATUS_KZ       CHAR(2)          (enum {10, 20, 30, 77, 88, 99})
+  //! STATUS_KZ codes 77 (1,871 records) and 88 (412 records) are undocumented — no legacy spec found
+  //? STATUS_KZ 77 and 88: business owners must clarify before these can be mapped to StageName
+  VERTRETER_NR    INT              (indexed, note "Sales rep number — links to HR system employee table")
+  //! VERTRETER_NR → Opportunity.OwnerId requires HR crosswalk; works council (Betriebsrat) approval required before 2026-06-24
+}
+
+schema auftrag_pos (note "ATLAS order line items — 9.1M rows; aggregation strategy TBD") {
+  POS_NR          INT              (pk)
+  AUF_NR          STRING(20)       (indexed, ref atlas_auftraege.AUF_NR)
+  ARTIKEL_NR      STRING(20)       (note "Product/article number")
+  MENGE           DECIMAL(10, 2)   (note "Quantity")
+  EINZEL_PREIS    DECIMAL(10, 2)   (note "Unit price")
+  GESAMT_PREIS    DECIMAL(10, 2)   (note "Line total")
+  //? Line items: unclear whether to map to OpportunityLineItems or denormalise into Opportunity.Amount only
+}
+
+schema billing_api_customer (note "Billing REST API — GET /v2/customers/{id}; nested JSON") {
+  customer_ref    STRING(50)       (pk, unique, note "Crosswalk key to sf_account.KD_REF__c")
+  //! 0.4% crosswalk orphans (customer_ref has no matching KD_NR in ATLAS) — remediation handed to accounting
+  payment_status  STRING(20)       (enum {ok, dunning_1, dunning_2, legal}, note "Current dunning level")
+  subscriptions   list_of record   (note "Active subscriptions — each becomes one sf_asset") {
+    contract_no   STRING(50)       (unique, note "Becomes Asset.SerialNumber")
+    product_code  STRING(50)       (note "Product reference")
+    mrr_eur       DECIMAL(10, 2)   (note "Monthly recurring revenue in EUR → Asset.MRR__c")
+    started_on    DATE             (note "Subscription start → Asset.StartDate")
+    cancelled_on  DATE             (note "Subscription end → Asset.EndDate; null = active")
+  }
+}
+
+// ──────────────────────────────────────────────
+// TARGET SCHEMAS
+// ──────────────────────────────────────────────
+
+schema sf_account (note "Salesforce Account — one per ATLAS KUNDEN record") {
+  Id              UUID             (pk, required)
+  ATLAS_ID__c     STRING(20)       (unique, required, indexed, note "External ID — KD_NR crosswalk; used for upsert")
+  KD_REF__c       STRING(50)       (unique, indexed, note "Billing system crosswalk key")
+  Name            STRING(255)      (required, note "Company / customer name")
+  BillingStreet   STRING(255)
+  BillingPostalCode STRING(20)
+  BillingCity     STRING(100)
+  BillingCountry  STRING(40)       (note "ISO country name; derived from LAND code")
+  Phone           STRING(40)       (note "E.164 normalised")
+  Payment_Status__c STRING(20)     (enum {ok, dunning_1, dunning_2, legal}, note "From billing API; populated in second-pass load")
+  Industry        STRING(40)       (note "Salesforce standard picklist; mapped from BRANCHE — mapping file lost")
+}
+
+schema sf_contact (note "Salesforce Contact — covers both KUNDEN primary contacts and ANSPRECHPARTNER records") {
+  Id              UUID             (pk, required)
+  AccountId       UUID             (required, ref sf_account.Id)
+  ATLAS_ID__c     STRING(20)       (unique, indexed, note "External ID for KUNDEN-derived primary contacts")
+  ATLAS_AP_ID__c  STRING(20)       (unique, indexed, note "External ID for ANSPRECHPARTNER-derived contacts")
+  Salutation      STRING(40)       (enum {Herr, Frau, Divers})
+  FirstName       STRING(40)       (pii)
+  LastName        STRING(80)       (required, pii, note "Mandatory in Salesforce — empty NACHNAME records need default")
+  Title           STRING(128)      (note "Job function / title from ANSPRECHPARTNER.FUNKTION")
+  Department      STRING(80)       (note "From ANSPRECHPARTNER.ABTEILUNG")
+  Email           STRING(80)       (pii, format email)
+  Phone           STRING(40)       (pii, note "E.164 normalised")
+  HasOptedOutOfEmail BOOLEAN       (note "Derived from WERBUNG_OK / NEWSLETTER_KZ — logic inverted vs source")
+}
+
+schema sf_opportunity (note "Salesforce Opportunity — one per ATLAS AUFTRAEGE record; scope TBD for pre-2015") {
+  Id              UUID             (pk, required)
+  AccountId       UUID             (required, ref sf_account.Id)
+  ATLAS_Order_No__c STRING(20)     (unique, indexed, note "External ID — AUF_NR crosswalk")
+  Name            STRING(120)      (required, note "Derived: 'Order {AUF_NR}'")
+  CloseDate       DATE             (required, note "From AUF_DATUM")
+  CurrencyIsoCode CHAR(3)          (enum {EUR, DEM}, note "DEM records flagged — amount accuracy uncertain")
+  Amount          DECIMAL(15, 2)
+  StageName       STRING(40)       (required, note "Mapped from STATUS_KZ; codes 77 and 88 block until clarified")
+  OwnerId         UUID             (note "From VERTRETER_NR via HR crosswalk — blocked on works council approval")
+}
+
+schema sf_asset (note "Salesforce Asset — one per active billing subscription") {
+  Id              UUID             (pk, required)
+  AccountId       UUID             (required, ref sf_account.Id)
+  Name            STRING(255)      (required, note "Derived from product_code")
+  SerialNumber    STRING(80)       (unique, indexed, note "From billing subscriptions.contract_no")
+  Status          STRING(20)       (required, enum {Installed, Obsolete}, note "Installed if cancelled_on is null, else Obsolete")
+  StartDate       DATE             (note "From subscriptions.started_on")
+  EndDate         DATE             (note "From subscriptions.cancelled_on")
+  MRR__c          DECIMAL(10, 2)   (note "Monthly recurring revenue in EUR")
+}
+
+// ──────────────────────────────────────────────
+// NAMED TRANSFORMS (value maps)
+// ──────────────────────────────────────────────
+
+transform anrede_to_salutation {
+  map {
+    H:       "Herr"
+    F:       "Frau"
+    D:       "Divers"
+    null:    null
+    _:       null
+  }
+  //? ANREDE='X' (312 records): Gerhard retired without documenting this code — map to null pending clarification
+}
+
+transform werbung_ok_to_optout {
+  // J = opted IN to marketing → HasOptedOutOfEmail = false
+  // N or empty = opted OUT → HasOptedOutOfEmail = true
+  map {
+    J:       false
+    N:       true
+    null:    true
+    _:       true
+  }
+}
+
+transform newsletter_kz_to_optout {
+  map {
+    J:       false
+    N:       true
+    null:    true
+    _:       true
+  }
+}
+
+transform status_kz_to_stage {
+  map {
+    10:      "Closed Won"
+    20:      "Delivered"
+    30:      "Closed Won"
+    99:      "Closed Lost"
+    77:      null
+    88:      null
+  }
+  //? STATUS_KZ 77 (1,871 records) and 88 (412 records): undocumented — mapped to null until business owners clarify
+}
+
+transform land_to_country {
+  map {
+    D:       "DE"
+    A:       "AT"
+    CH:      "CH"
+    NL:      "NL"
+    F:       "FR"
+    GB:      "GB"
+    EU:      null
+  }
+  //? LAND='EU' (7 records): not a valid ISO country — map to null or needs manual review
+}
+
+// ──────────────────────────────────────────────
+// MAPPINGS
+// ──────────────────────────────────────────────
+
+mapping kunden_to_account (note "ATLAS KUNDEN → Salesforce Account; filter: GELOESCHT_KZ != 'J'") {
+  source {
+    atlas_kunden (filter "GELOESCHT_KZ IS NULL OR GELOESCHT_KZ != 'J'")
+  }
+  target { sf_account }
+
+  KD_NR      -> ATLAS_ID__c    { to_string }
+  NAME1      -> Name           { trim }
+  STRASSE    -> BillingStreet  { trim }
+  PLZ        -> BillingPostalCode { trim }
+  ORT        -> BillingCity    { trim }
+  LAND       -> BillingCountry { ...land_to_country }
+  TELEFON    -> Phone          { trim | to_e164 | warn_if_invalid }
+  //! ~2% of phone numbers may fail E.164 conversion and need manual correction
+  BRANCHE    -> Industry       { "Map @BRANCHE to Salesforce Industry picklist using rebuilt crosswalk (Branchen_Mapping_FINAL_v3.xlsx is lost — must rebuild)" }
+  //? Industry mapping: lost reference file must be rebuilt before this arrow can be finalised
+
+  // KD_REF__c populated in second-pass billing sync — see billing_to_asset mapping
+  // Payment_Status__c populated in second-pass billing sync
+}
+
+mapping kunden_to_contact (note "ATLAS KUNDEN → Salesforce Contact (primary contact per account); filter: GELOESCHT_KZ != 'J'") {
+  source {
+    atlas_kunden (filter "GELOESCHT_KZ IS NULL OR GELOESCHT_KZ != 'J'")
+  }
+  target { sf_contact }
+
+  KD_NR      -> ATLAS_ID__c    { to_string }
+  // AccountId linked via ATLAS_ID__c crosswalk after sf_account upsert
+  ANREDE     -> Salutation     { ...anrede_to_salutation }
+  NAME1      -> LastName       { trim | null_if_empty | error_if_null }
+  NAME2      -> FirstName      { trim | null_if_empty }
+  EMAIL      -> Email          { trim | lowercase | "Remove trailing semicolons" | validate_email | null_if_invalid }
+  //! 4.1% of emails are invalid — set null and log for remediation outreach
+  TELEFON    -> Phone          { trim | to_e164 | warn_if_invalid }
+  WERBUNG_OK -> HasOptedOutOfEmail { ...werbung_ok_to_optout }
+  //! Inverted logic: J=opt-in maps to false, N/empty maps to true — previous test suite failure confirmed; verify carefully
+
+  // GEB_DATUM: NOT mapped — DSGVO decision pending 2026-06-19
+  // IBAN / BIC: NOT mapped — remain in billing system
+  // NOTIZ1–5: NOT mapped — DSGVO review pending; health data confirmed in spot-check
+}
+
+mapping ansprechpartner_to_contact (note "ATLAS ANSPRECHPARTNER → Salesforce Contact; ~102,557 records") {
+  source {
+    atlas_ansprechpartner
+    //? AUSGESCHIEDEN_KZ: sales wants history retained; DSGVO requires deletion for ex-employees — escalation needed before load
+  }
+  target { sf_contact }
+
+  AP_NR          -> ATLAS_AP_ID__c  { to_string }
+  // AccountId resolved via KD_NR → sf_account.ATLAS_ID__c crosswalk
+  VORNAME        -> FirstName       { trim | null_if_empty }
+  NACHNAME       -> LastName        { trim | null_if_empty | "Default to 'Unbekannt' if empty, log for manual review" }
+  //! 211 records have empty NACHNAME — Salesforce requires LastName; defaulting to 'Unbekannt' as holding value
+  FUNKTION       -> Title           { trim | null_if_empty }
+  ABTEILUNG      -> Department      { trim | null_if_empty }
+  EMAIL          -> Email           { trim | lowercase | validate_email | null_if_invalid }
+  TELEFON        -> Phone           { trim | to_e164 | warn_if_invalid }
+  NEWSLETTER_KZ  -> HasOptedOutOfEmail { ...newsletter_kz_to_optout }
+}
+
+mapping auftraege_to_opportunity (note "ATLAS AUFTRAEGE → Salesforce Opportunity; migration scope: steering committee decision pending") {
+  source {
+    atlas_auftraege
+    //? Scope: 2.4M total rows; pre-2015 orders (majority) may be excluded — awaiting steering committee decision
+  }
+  target { sf_opportunity }
+
+  AUF_NR       -> ATLAS_Order_No__c  { to_string }
+  AUF_NR       -> Name               { "Concatenate 'Order ' with @AUF_NR" }
+  AUF_DATUM    -> CloseDate
+  WAEHRUNG     -> CurrencyIsoCode    { "Pass through; DEM records flagged — no FX conversion rate available" }
+  //! 184,220 records in DEM (Deutsche Mark pre-2002): Amount values will be incorrect without a conversion rate crosswalk
+  GESAMT_NETTO -> Amount
+  STATUS_KZ    -> StageName          { ...status_kz_to_stage | error_if_null }
+  //? STATUS_KZ 77 and 88 resolve to null — these records blocked until business owners define the StageName mapping
+  VERTRETER_NR -> OwnerId            { "Look up @VERTRETER_NR in HR employee-to-user crosswalk to resolve Salesforce OwnerId" }
+  //! Works council (Betriebsrat) approval required before any employee-linked data may be loaded — deadline 2026-06-24
+}
+
+mapping billing_to_asset (note "Billing REST API subscriptions → Salesforce Asset; also sets sf_account.KD_REF__c and Payment_Status__c") {
+  source {
+    billing_api_customer
+    //! 0.4% crosswalk orphans: @billing_api_customer.customer_ref has no matching KD_NR in ATLAS — pass to accounting for remediation
+  }
+  target { sf_account }
+
+  // Phase 1 of this mapping: update account-level fields from billing API
+  customer_ref   -> KD_REF__c
+  payment_status -> Payment_Status__c
+}
+
+mapping billing_subscriptions_to_asset (note "Billing API subscriptions list → individual Salesforce Asset records") {
+  source {
+    billing_api_customer
+  }
+  target { sf_asset }
+
+  each subscriptions -> sf_asset {
+    // AccountId resolved via billing_api_customer.customer_ref → sf_account.KD_REF__c crosswalk
+    contract_no   -> SerialNumber
+    product_code  -> Name          { "Resolve product name from @product_code using product catalogue lookup" }
+    mrr_eur       -> MRR__c
+    started_on    -> StartDate
+    cancelled_on  -> EndDate
+    -> Status                      { "Set 'Installed' if @cancelled_on is null, else 'Obsolete'" }
+  }
+}

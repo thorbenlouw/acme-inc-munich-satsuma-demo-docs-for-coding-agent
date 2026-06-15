@@ -1,0 +1,105 @@
+{
+  "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "name": "BillingToAssets_MappingDataFlow",
+    "description": "Satsuma: billing_api_customer -> sf_asset. Handles nested subscriptions (each), KD-REF crosswalk join, orphan routing, Status derivation.",
+    "satsuma_mapping": "billing to assets",
+    "source_schemas": ["billing_api_customer", "atlas_kunden"],
+    "target_schema": "sf_asset",
+    "compliance_notes": "MRR__c is EUR-only; orphans (~0.4%) route to remediation queue"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DataFactory/factories/dataflows",
+      "apiVersion": "2018-06-01",
+      "name": "[concat(parameters('dataFactoryName'), '/BillingToAssets')]",
+      "properties": {
+        "type": "MappingDataFlow",
+        "typeProperties": {
+          "sources": [
+            {
+              "dataset": {
+                "referenceName": "BillingApiCustomer_JSON",
+                "type": "DatasetReference"
+              },
+              "name": "BillingApiSource",
+              "description": "GET /v2/customers/{id} from billing platform"
+            },
+            {
+              "dataset": {
+                "referenceName": "AtlasKundenKdRef_CSV",
+                "type": "DatasetReference"
+              },
+              "name": "KdRefCrosswalk",
+              "description": "KD-REF crosswalk table: customer_ref (billing) -> KD_NR (atlas_kunden)"
+            }
+          ],
+          "sinks": [
+            {
+              "dataset": {
+                "referenceName": "SfAsset_Salesforce",
+                "type": "DatasetReference"
+              },
+              "name": "SfAssetSink",
+              "description": "Salesforce Asset object (one per billing subscription)"
+            },
+            {
+              "dataset": {
+                "referenceName": "OrphanRemediationQueue_Parquet",
+                "type": "DatasetReference"
+              },
+              "name": "OrphanQueue",
+              "description": "Orphaned billing records (~0.4%) that failed KD-REF join; route to manual review"
+            }
+          ],
+          "transformations": [
+            {
+              "name": "ExpandSubscriptions",
+              "description": "Flatten billing_api_customer.subscriptions (list_of record) into rows. Each subscription becomes one asset."
+            },
+            {
+              "name": "JoinKdRef",
+              "description": "Left join: subscriptions.customer_ref -> KD-REF -> KD_NR. Separate orphans (no match)."
+            },
+            {
+              "name": "DeriveStatusFromCancelledDate",
+              "description": "IF cancelled_on IS NULL THEN 'Active' ELSE 'Cancelled'. Transform: \"If @.cancelled_on is null then Active else Cancelled\""
+            },
+            {
+              "name": "DerivedFieldMappings",
+              "description": "Derive additional SF fields: Name (from product + contract), PurchaseDate, UsageEndDate, Price, Quantity."
+            },
+            {
+              "name": "FilterValidAssets",
+              "description": "Remove nulls in required fields (SerialNumber, Product_Code__c); flag for remediation if present."
+            },
+            {
+              "name": "SelectAndMap",
+              "description": "Final select: map source columns to target sf_asset fields."
+            },
+            {
+              "name": "IdentifyOrphans",
+              "description": "Split stream: rows with no KD_NR match -> OrphanQueue; rows with KD_NR -> SfAssetSink."
+            }
+          ],
+          "script": "source(output(\n    customer_ref as string,\n    payment_status as string,\n    subscriptions as (contract_no as string, product_code as string, mrr_eur as decimal(10,2), started_on as date, cancelled_on as date)[]\n),\nallowSchemaDrift: true,\nvalidateSchema: false,\nignoreNoFilesFound: false) ~> BillingApiSource\n\nsource(output(\n    customer_ref as string,\n    kd_nr as int\n),\nallowSchemaDrift: true,\nvalidateSchema: false) ~> KdRefCrosswalk\n\nBillingApiSource\n    flt(subscriptions) ~> ExpandSubscriptions\n\nExpandSubscriptions, KdRefCrosswalk\n    ExpandSubscriptions@customer_ref == KdRefCrosswalk@customer_ref\n    (left) ~> JoinKdRef\n\nJoinKdRef\n    derive(\n        Status = case(\n            isNull(cancelled_on), 'Active',\n            'Cancelled'\n        )\n    ) ~> DeriveStatusFromCancelledDate\n\nDeriveStatusFromCancelledDate\n    derive(\n        Name = concat(product_code, '-', contract_no),\n        PurchaseDate = started_on,\n        UsageEndDate = cancelled_on,\n        Quantity = 1.0,\n        Price = mrr_eur,\n        SerialNumber = contract_no\n    ) ~> DerivedFieldMappings\n\nDerivedFieldMappings\n    filter(\n        !isNull(SerialNumber) &&\n        !isNull(product_code)\n    ) ~> FilterValidAssets\n\nFilterValidAssets\n    select(\n        product_code as Product_Code__c,\n        contract_no as SerialNumber,\n        mrr_eur as MRR__c,\n        Name as Name,\n        Status as Status,\n        PurchaseDate as PurchaseDate,\n        UsageEndDate as UsageEndDate,\n        Price as Price,\n        Quantity as Quantity,\n        kd_nr as AccountKdNr,\n        payment_status as PaymentStatus\n    ) ~> SelectAndMap\n\nSelectAndMap\n    split(\n        !isNull(AccountKdNr),\n        disjoint: false\n    ) ~> IdentifyOrphans\n\nIdentifyOrphans@true ~> SfAssetSink\nIdentifyOrphans@false ~> OrphanQueue\n"
+        }
+      }
+    }
+  ],
+  "parameters": {
+    "dataFactoryName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Azure Data Factory instance"
+      }
+    }
+  },
+  "outputs": {
+    "dataFlowName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.DataFactory/factories/dataflows', parameters('dataFactoryName'), 'BillingToAssets'), '2018-06-01').name]"
+    }
+  }
+}
