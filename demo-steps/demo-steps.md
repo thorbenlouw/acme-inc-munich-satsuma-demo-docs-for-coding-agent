@@ -28,14 +28,9 @@ Use Opus!
 
 > Generate a Satsuma spec from the Excel file in `@analysis-output/Customer_Migration_Mapping_v17_FINAL_(2).xlsx` and place the output in spec/.
 
-
 In the meantime, we'll talk about Satsuma
 
-
-
-> 
-
-## Step 3 - 
+## Step 3 - demo satsuma features on pre-gen files to save time
 
 Attempt most of these with a cheap, quick model like Haiku.
 
@@ -49,16 +44,13 @@ Attempt most of these with a cheap, quick model like Haiku.
 
 > Tell me about unanswered questions in the spec.
 
-
 > After reading the Satsuma spec, can you generate some sample appropriate data examples for the input schemas in `sample-data/`?
-
 
 > Suggest a top-10 manual e2e test case plan in `@implementation/test-plan.md`, prioritising compliance risk and complex logic.
 
-
 > What are the top GDPR-related risks to focus on in this pipeline? Which target fields contain PII and what is their source?
 
-## Step 4
+## Step 4 - generating implementations
 
 Generating implementations (if time)
 
@@ -67,4 +59,3 @@ Generating implementations (if time)
 > In a subfolder in `@implementation/`, generate an Azure Data Factory Mapping DataFlow implementation for the billing_api to assets pipeline.
 
 * In a subfolder in `implementation/`, create a Databricks Lakehouse Declarative Pipeline implementation (notebook) for the kunden → Salesforce export data product pipeline. Follow ACME Conventions. [Use a good model here like Opus]
-
