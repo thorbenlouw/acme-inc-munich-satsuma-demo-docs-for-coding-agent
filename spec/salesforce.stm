@@ -1,0 +1,125 @@
+note {
+  """
+  Salesforce target schemas for the Acme **Customer 360** migration.
+
+  Targets for ATLAS (PostgreSQL) + Billing REST API source data. Field names and
+  types follow the Salesforce object model; custom fields use the `__c` suffix.
+  PII fields carry the `pii` tag and a governance treatment per ACME conventions.
+  """
+}
+
+namespace sf {
+  schema account (
+    note "Salesforce Account — companies (VKZ='F') and the billing/address side of customers",
+    retention "CRM lifetime; deletion follows ATLAS Löschkonzept (GELOESCHT_KZ filter upstream)"
+  ) {
+    ATLAS_ID__c           STRING (unique, indexed, note "External ID = KUNDEN.KD_NR")
+    Name                  STRING(255)    (note "Company name when VKZ='F'")
+    BillingStreet         STRING(60) (
+      pii,
+      note "House number is part of the street string — do not split"
+    )
+    BillingPostalCode     STRING(5) (
+      pii,
+      note "Keep as text — leading zeros are significant (01067 Dresden)"
+    )
+    BillingCity           STRING(40)     (pii)
+    BillingState          STRING(40) (note "Free text in ATLAS — needs standardising")
+    BillingCountryCode    STRING(2) (
+      note "ISO 3166-1 alpha-2, mapped from ATLAS 1-char codes"
+    )
+    Industry              STRING(40) (
+      note "SF Industry picklist — mapped from ATLAS BRANCHE (84 codes)"
+    )
+    AnnualRevenue         DECIMAL(18,2) (
+      note "Candidate target for UMSATZ_KZ — meaning unconfirmed"
+    )
+    VAT_Number__c         STRING(14)
+    Credit_Hold__c        BOOLEAN        (note "From SPERRE_KZ J/N")
+    Payment_Status__c     STRING(40)     (note "Dunning level from Billing API")
+    Description           STRING (
+      pii,
+      note "Concatenated NOTIZ1–5 free text — DSGVO screening required"
+    )
+    Legacy_Created_By__c  STRING(8) (
+      pii,
+      note "ATLAS user shorthand — employee personal data; Betriebsrat involvement"
+    )
+    CreatedDate           TIMESTAMP (
+      note "SF audit field — only settable via API special permission"
+    )
+  }
+
+  schema contact (
+    note "Salesforce Contact — people (VKZ='P') and ANSPRECHPARTNER",
+    retention "CRM lifetime; birthdate deliberately NOT migrated (data minimisation)"
+  ) {
+    ATLAS_ID__c              STRING (
+      unique,
+      indexed,
+      note "KUNDEN.KD_NR for person customers"
+    )
+    ATLAS_AP_ID__c           STRING (
+      unique,
+      indexed,
+      note "External ID = ANSPRECHPARTNER.AP_NR"
+    )
+    AccountId                STRING (indexed, note "Lookup to sf::account via ATLAS_ID__c")
+    Salutation               STRING(20) (note "Mapped from ANREDE/ANREDE value list")
+    FirstName                STRING(40)   (pii)
+    LastName                 STRING(60) (
+      pii,
+      required,
+      note "SF mandatory — fallback for blank source values to clarify"
+    )
+    Title                    STRING(40)   (pii)
+    Department               STRING(40)
+    Email                    STRING(120)  (pii, format email)
+    Phone                    STRING(40)   (pii, note "Normalised toward E.164")
+    MobilePhone              STRING(40)   (pii, note "Normalised toward E.164")
+    HasOptedOutOfEmail       BOOLEAN (
+      note "INVERTED consent — see lookups::consent_to_optout"
+    )
+    Last_Activity_Legacy__c  DATE (note "From ANSPRECHPARTNER.LETZTER_KONTAKT")
+  }
+
+  schema opportunity (
+    note "Salesforce Opportunity — ATLAS orders (AUFTRAEGE)",
+    retention "CRM lifetime; pre-2015 scope under steering-committee escalation"
+  ) {
+    ATLAS_Order_No__c  STRING (unique, indexed, note "External ID = AUFTRAEGE.AUF_NR")
+    AccountId          STRING (indexed, note "Lookup to sf::account via ATLAS_ID__c")
+    Name               STRING(120)    (note "Opportunity name — derivation TBD")
+    CloseDate          DATE           (note "From AUF_DATUM; pre-2002 = DM era")
+    CurrencyIsoCode    STRING(3) (note "Mostly EUR; 'DM' on 184,220 legacy rows")
+    Amount             DECIMAL(12,2) (note "From GESAMT_NETTO — see currency caveat")
+    StageName          STRING(40)     (note "Mapped from STATUS_KZ value list")
+    OwnerId            STRING (
+      note "Mapped from VERTRETER_NR via HR user table — employee data"
+    )
+    Delivery_Date__c   DATE           (note "From LIEF_DATUM")
+  }
+
+  schema asset (
+    note "Salesforce Asset — one per Billing API subscription",
+    retention "CRM lifetime; bank data (IBAN/BIC) explicitly excluded from CRM"
+  ) {
+    Account            STRING (
+      indexed,
+      note "Lookup to sf::account via KD-REF crosswalk → ATLAS_ID__c"
+    )
+    SerialNumber       STRING (
+      note "From subscription contract_no, e.g. V-2019-08841"
+    )
+    Product_Code__c    STRING         (note "From subscription product_code")
+    MRR__c             DECIMAL(12,2) (
+      note "Monthly recurring revenue — always EUR per Billing team"
+    )
+    Status             STRING(20) (
+      enum {Active, Cancelled},
+      note "Active when cancelled_on is null"
+    )
+    Start_Date__c      DATE           (note "From subscription started_on")
+    Cancelled_Date__c  DATE (note "From subscription cancelled_on; null = active")
+  }
+}

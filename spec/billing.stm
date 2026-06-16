@@ -1,0 +1,70 @@
+import { sf::asset, sf::account } from "salesforce.stm"
+import { dunning_status_map } from "lookups.stm"
+
+note {
+  """
+  **Billing REST API → Salesforce Asset / Account**
+  Source: `GET /v2/customers/{id}` returns nested JSON with a `subscriptions[]`
+  list. Each subscription becomes one Asset (fan-out via `each`).
+
+  Two cross-cutting rules:
+  - **KD-REF crosswalk** — `customer_ref` ("KD-0048113") maps to KUNDEN.KD_NR via a
+    crosswalk table. ~0.4% orphans (Offene Punkte #11) route to a remediation list —
+    never silently dropped.
+  - **MRR is always EUR** (per Billing team). `payment_status` (dunning) → Account.
+  """
+}
+
+namespace billing {
+  schema customer (
+    note "Billing API customer payload — nested subscriptions list",
+    retention "Billing system of record; bank data never enters CRM"
+  ) {
+    customer_ref    STRING (
+      note "e.g. 'KD-0048113' = KUNDEN.KD_NR with 'KD-' prefix — needs crosswalk"
+    )
+    payment_status  STRING (
+      note "Dunning stage: ok / dunning_1 / dunning_2 / legal"
+    )
+    subscriptions list_of record (note "One entry per contract → one Salesforce Asset") {
+      contract_no   STRING         (note "e.g. 'V-2019-08841'")
+      product_code  STRING         (note "e.g. 'SENS-TH-04'")
+      mrr_eur       DECIMAL(12,2) (note "Monthly recurring revenue — always EUR")
+      started_on    DATE
+      cancelled_on  DATE           (note "null = active subscription")
+    }
+  }
+}
+
+// --- Subscriptions → Asset (one Asset per subscription) --------------------
+mapping billing_to_asset {
+  source {
+    billing::customer,
+    sf::account
+  }
+  target { sf::asset }
+
+  //! KD-REF crosswalk: ~0.4% orphans (no matching KD_NR) → remediation list, NOT dropped (Offene Punkte #11).
+  customer_ref, sf::account -> Account {
+    "Resolve @customer_ref to @sf::account.ATLAS_ID__c via KD-REF crosswalk; strip 'KD-' prefix"
+  }
+
+  each subscriptions -> sf::asset {
+    contract_no -> SerialNumber { "1:1" }
+    product_code -> Product_Code__c { "1:1" }
+    mrr_eur -> MRR__c { "1:1 — always EUR" }
+    started_on -> Start_Date__c { "1:1" }
+    cancelled_on -> Cancelled_Date__c { "1:1 — null when active" }
+    cancelled_on -> Status {
+      "@cancelled_on is null → 'Active', otherwise 'Cancelled'"
+    }
+  }
+}
+
+// --- Customer-level dunning status → Account -------------------------------
+mapping billing_to_account {
+  source { billing::customer }
+  target { sf::account }
+
+  payment_status -> Payment_Status__c { ...dunning_status_map }
+}

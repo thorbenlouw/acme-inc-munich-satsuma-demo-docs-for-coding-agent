@@ -1,0 +1,186 @@
+import { sf::account, sf::contact } from "salesforce.stm"
+import { salutation_map, country_iso_map, email_cleanse, to_phone_e164, consent_to_optout } from "lookups.stm"
+
+note {
+  """
+  **KUNDEN → Salesforce Account / Contact**
+  Source: ATLAS PostgreSQL, table KUNDEN (331,408 rows, stand 02/2025).
+
+  KUNDEN is split by the control flag `VKZ`: F=Firma → Account, P=Privatperson →
+  Contact. The two mappings below share one source schema and one row-level filter
+  (only non-deleted records). NAME1 is overloaded (company name *or* surname).
+  """
+}
+
+namespace atlas {
+  schema kunden (
+    note "ATLAS master customer table — companies and private persons (split by VKZ)",
+    retention "Source system; deleted rows (GELOESCHT_KZ='J', ~28k) excluded per Löschkonzept"
+  ) {
+    KD_NR         INT (
+      pk,
+      note "Customer number — External ID. Numbering gaps from 2009 archive run are fine"
+    )
+    ANREDE        CHAR(1) (
+      note "Salutation code — see lookups::salutation_map; 'X' ×312 unknown"
+    )
+    NAME1         VARCHAR(60) (
+      pii,
+      required,
+      note "Overloaded: company name (VKZ='F') or surname (VKZ='P')"
+    )
+    NAME2         VARCHAR(60) (
+      pii,
+      note "First name (VKZ='P') or name affix (VKZ='F')"
+    )
+    NAME3         VARCHAR(60) (
+      pii,
+      note "Dropped — empty since 2007 (0 populated rows)"
+    )
+    VKZ           CHAR(1) (
+      enum {F, P},
+      note "Control field — NOT migrated; steers Account/Contact split"
+    )
+    STRASSE       VARCHAR(60) (pii, note "Street incl. house number — do not split")
+    PLZ           CHAR(5) (pii, note "Postal code — text, preserve leading zeros")
+    ORT           VARCHAR(40)   (pii)
+    LAND          CHAR(3) (
+      note "ATLAS country code → ISO; 7 'EU' exotics need cleansing"
+    )
+    BUNDESLAND    VARCHAR(20) (
+      note "Free text — Bayern/BAY/By./Bavaria … needs standardising"
+    )
+    EMAIL         VARCHAR(120) (
+      pii,
+      format email,
+      note "4.1% RFC-invalid (Offene Punkte #3)"
+    )
+    TELEFON       VARCHAR(40)   (pii, note "19 formats found")
+    TELEFAX       VARCHAR(40) (
+      pii,
+      note "Dropped — no longer needed (Hr. Müller 14.03.)"
+    )
+    MOBIL         VARCHAR(40)   (pii)
+    GEB_DATUM     DATE (
+      pii,
+      note "NOT migrated — no purpose in B2B CRM; DSGVO Art. 5 data minimisation (Offene Punkte #2)"
+    )
+    WERBUNG_OK    CHAR(1) (
+      note "Advertising consent (opt-IN) — INVERTED to opt-OUT on load"
+    )
+    BRANCHE       CHAR(4) (note "ATLAS branch code (84 values) → SF Industry")
+    UMSATZ_KZ     CHAR(1)       (note "Revenue code A–E; meaning unconfirmed")
+    UST_ID        VARCHAR(14)   (note "VAT ID")
+    IBAN          VARCHAR(34) (
+      pii,
+      note "NOT migrated — bank data stays out of CRM (security)"
+    )
+    BIC           VARCHAR(11)   (pii, note "NOT migrated — see IBAN")
+    GELOESCHT_KZ  CHAR(1) (
+      note "Soft-delete flag — used as row filter, not migrated"
+    )
+    SPERRE_KZ     CHAR(1)       (note "Credit hold J/N")
+    ANGELEGT_AM   TIMESTAMP     (note "Created timestamp")
+    ANGELEGT_VON  VARCHAR(8) (
+      pii,
+      note "ATLAS user shorthand — employee personal data (Betriebsrat, Offene Punkte #12)"
+    )
+    NOTIZ1        VARCHAR(255) (
+      pii,
+      note "Free text since 1998 — DSGVO screening required (health data found)"
+    )
+    NOTIZ2        VARCHAR(255)  (pii)
+    NOTIZ3        VARCHAR(255)  (pii)
+    NOTIZ4        VARCHAR(255)  (pii)
+    NOTIZ5        VARCHAR(255)  (pii)
+  }
+
+  // KUNDEN_ADR — 1:n delivery addresses. SF data model unresolved (Offene Punkte #6).
+  //? How do multiple delivery addresses per customer map to Salesforce? Workshop pending (Markus).
+  schema kunden_adr (
+    note "ATLAS delivery addresses — 1:n per customer; SF target model UNRESOLVED",
+    retention "Source system"
+  ) {
+    ADR_NR       VARCHAR(60)  (pk)
+    KD_NR        VARCHAR(60)  (note "FK to kunden.KD_NR")
+    ADR_ART      VARCHAR(60)  (note "Address type")
+    NAME_ZUSATZ  VARCHAR(60)  (pii)
+    STRASSE      VARCHAR(60)  (pii)
+    PLZ          VARCHAR(60)  (pii)
+    ORT          VARCHAR(60)  (pii)
+    LAND         VARCHAR(60)
+    GUELTIG_AB   VARCHAR(60)
+    GUELTIG_BIS  VARCHAR(60)
+  }
+
+  // KUNDEN_HIST — change history. NOT migrated; CSV archive export, 7-year retention.
+  //? Retention vs Löschkonzept conflict — legal review pending (Dr. Weber).
+  schema kunden_hist (
+    note "ATLAS change history — NOT migrated; exported to CSV archive (7-year retention)",
+    retention "Archive 7 years; not loaded to Salesforce"
+  ) {
+    HIST_ID     VARCHAR(255)  (pk)
+    KD_NR       VARCHAR(255)
+    FELD_NAME   VARCHAR(255)
+    ALT_WERT    VARCHAR(255) (pii, note "Old value — may contain personal data")
+    NEU_WERT    VARCHAR(255) (pii, note "New value — may contain personal data")
+    GEAEND_AM   VARCHAR(255)
+    GEAEND_VON  VARCHAR(255)  (pii)
+  }
+}
+
+// --- KUNDEN (companies, VKZ='F') → Account ---------------------------------
+mapping kunden_to_account {
+  source { atlas::kunden (filter "GELOESCHT_KZ <> 'J'") }
+  target { sf::account }
+
+  KD_NR -> ATLAS_ID__c {
+    "1:1 external ID; numbering gaps from 2009 archive are fine"
+  }
+  NAME1 -> Name {
+    "Company name when @VKZ = 'F'. Person rows (VKZ='P') route to Contact.LastName instead"
+  }
+  STRASSE -> BillingStreet { "1:1 — house number stays in the street string" }
+  PLZ -> BillingPostalCode {
+    "Keep as text — preserve leading zeros (01067 Dresden)"
+  }
+  ORT -> BillingCity
+  BUNDESLAND -> BillingState {
+    "Standardise free-text variants (Bayern/BAY/By./Bavaria → 'Bayern')"
+  }
+  LAND -> BillingCountryCode { ...country_iso_map }
+  BRANCHE -> Industry {
+    "Map ATLAS branch code → SF Industry; overflow → 'Other'"
+  }  //? Branchen_Mapping_FINAL_v3.xlsx missing (Offene Punkte #9)
+  UMSATZ_KZ -> AnnualRevenue { "Revenue code A–E → amount" }  //? meaning 'historisch gewachsen' — unconfirmed
+  UST_ID -> VAT_Number__c { "1:1; consider VAT checksum validation" }
+  SPERRE_KZ -> Credit_Hold__c { map { J: true, N: false } }
+  ANGELEGT_VON -> Legacy_Created_By__c {
+    "ATLAS user shorthand as text (users may no longer exist); employee PII"
+  }
+  ANGELEGT_AM -> CreatedDate {
+    "SF audit field — only settable via API special permission"
+  }  //? SF support ticket open 6+ weeks
+
+  NOTIZ1, NOTIZ2, NOTIZ3, NOTIZ4, NOTIZ5 -> Description {
+    "Concatenate @NOTIZ1 @NOTIZ2 @NOTIZ3 @NOTIZ4 @NOTIZ5 with line breaks"
+  }  //? DSGVO screening mandatory before load — health data found in samples (Offene Punkte #13)
+}
+
+// --- KUNDEN (persons, VKZ='P') → Contact -----------------------------------
+mapping kunden_to_contact {
+  source { atlas::kunden (filter "GELOESCHT_KZ <> 'J'") }
+  target { sf::contact }
+
+  KD_NR -> ATLAS_ID__c { "External ID for person customers (@VKZ = 'P')" }
+  ANREDE -> Salutation { ...salutation_map }
+  NAME1 -> LastName { "Surname when @VKZ = 'P'" }  //? 211-equivalent blank handling — SF LastName is mandatory
+  NAME2 -> FirstName {
+    "First name when @VKZ = 'P' (affix when 'F' — target TBD)"
+  }
+  EMAIL -> Email { ...email_cleanse }
+  TELEFON -> Phone { ...to_phone_e164 }
+  MOBIL -> MobilePhone { ...to_phone_e164 }
+  //! HIGH RISK: consent inversion — built wrong twice (Testlauf 1+2). J→false, N→true, blank→true (opt-out).
+  WERBUNG_OK -> HasOptedOutOfEmail { ...consent_to_optout }
+}

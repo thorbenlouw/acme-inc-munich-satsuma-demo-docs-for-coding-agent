@@ -1,0 +1,52 @@
+import { kunden_to_account, kunden_to_contact } from "kunden.stm"
+import { ansprechpartner_to_contact } from "ansprechpartner.stm"
+import { auftraege_to_opportunity } from "auftraege.stm"
+import { billing_to_asset, billing_to_account } from "billing.stm"
+
+note {
+  """
+  # Acme Inc — Customer 360 Migration
+
+  **Sources:** ATLAS (PostgreSQL) — KUNDEN, ANSPRECHPARTNER, AUFTRAEGE — plus the
+  Billing REST API. **Target:** Salesforce (Account, Contact, Opportunity, Asset).
+
+  This is the workspace entry point; it imports every mapping. Run
+  `satsuma graph customer360.stm --json` for the full topology, or
+  `satsuma find --tag pii --json` for the PII inventory.
+
+  ## Mappings
+  - `kunden_to_account`, `kunden_to_contact` — KUNDEN split by VKZ (F=company, P=person)
+  - `ansprechpartner_to_contact` — contact persons
+  - `auftraege_to_opportunity` — orders
+  - `billing_to_asset` — subscriptions (one Asset each), `billing_to_account` — dunning status
+
+  ## High-risk rules carried explicitly
+  - **Consent inversion** (WERBUNG_OK / NEWSLETTER_KZ → HasOptedOutOfEmail): J→false,
+    N→true, blank→true. `//!` flagged — built wrong twice.
+  - **Data minimisation:** GEB_DATUM / GEBURTSTAG not migrated; IBAN/BIC stay out of CRM;
+    deleted rows filtered (GELOESCHT_KZ <> 'J'); NOTIZ free text needs DSGVO screening.
+  - **KD-REF crosswalk:** ~0.4% billing orphans → remediation list, never dropped.
+
+  ## Out of scope / not migrated
+  KUNDEN_HIST (CSV archive), RESERVE_/FILLER_/KENNZ_ legacy columns, AUFTRAG_POS
+  "ARTIKEL+" placeholders (not yet reviewed). KUNDEN_ADR (1:n) and AUFTRAG_POS (1:n)
+  are documented stubs pending a data-model decision.
+
+  ## Open points (from the 'Offene Punkte' tab — unresolved at stand 14.03.2025)
+  1. ANREDE='X' (×312) — meaning unknown (ask Gerhard).
+  2. GEB_DATUM purpose unclear → not migrated, deletion concept (decision WS 19.06.).
+  3. Email: 4.1% RFC-invalid — leave blank or queue?
+  4. Phone: 19 formats → E.164; ~2% manual rework.
+  5. Consent inversion — who tests it this time (test catalogue by 20.06.).
+  6. KUNDEN_ADR 1:n delivery addresses — SF data model?
+  7. Pre-2015 orders (2.4M rows, DM before 2002) — steering-committee escalation.
+  8. Billing API nested subscriptions — structure unclear.
+  9. ATLAS branch codes (84) vs SF Industry (32) — mapping file lost.
+  10. STATUS_KZ 77 & 88 (2,283 orders) — undocumented.
+  11. KD-REF crosswalk — 0.4% orphans → remediation (Fr. Brandt, Buchhaltung).
+  12. Employee-related fields (ANGELEGT_VON, VERTRETER_NR) — Betriebsrat before go-live (24.06.).
+  13. NOTIZ1–5 free text — DSGVO screening mandatory (health data found).
+  14. (resolved) Laptop wiped — billing mapping + branch file lost, re-captured.
+  15. (resolved) This file (v17_FINAL_(2)) is the authoritative version.
+  """
+}

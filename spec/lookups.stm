@@ -1,0 +1,79 @@
+note {
+  """
+  Shared value lists and reusable transforms for the Acme Customer 360 migration.
+
+  Source value lists come from the **Wertelisten** tab (partly v12 — needs review)
+  and the embedded ANREDE list on the KUNDEN tab. Several codes are unresolved and
+  carry `//?` markers — do not silently default them.
+  """
+}
+
+// --- Salutation (ANREDE → Contact.Salutation) ------------------------------
+// Counts from KUNDEN tab: H ×198,412, F ×97,355, D ×1,204, blank ×34,125, X ×312.
+transform salutation_map {
+  map {
+    H: "Herr"
+    F: "Frau"
+    D: "Divers"
+    X: "Unknown"
+    null: "Unknown"
+  }
+}
+
+// --- Country (ATLAS 1-char → ISO 3166-1 alpha-2) ---------------------------
+transform country_iso_map {
+  map {
+    D: "DE"
+    A: "AT"
+    CH: "CH"
+    NL: "NL"
+    F: "FR"
+    GB: "GB"
+  }
+}
+
+// --- Order status (AUFTRAEGE.STATUS_KZ → Opportunity.StageName) -------------
+transform order_status_map {
+  map {
+    10: "Closed Won"
+    20: "In Delivery"
+    30: "Closed Won"
+    99: "Closed Lost"
+  }
+}
+
+// --- Dunning status (Billing payment_status → Account.Payment_Status__c) ----
+//? SF picklist values for dunning stages still to be confirmed (Billing tab).
+transform dunning_status_map {
+  map {
+    ok: "Current"
+    dunning_1: "Dunning 1"
+    dunning_2: "Dunning 2"
+    legal: "Legal Collection"
+  }
+}
+
+// --- Reusable field transforms ---------------------------------------------
+// Email cleansing — trim, lowercase, strip the trailing-semicolon import
+// artefact from 2011, validate. ~4.1% are RFC-invalid (Offene Punkte #3).
+transform email_cleanse {
+  trim
+  | lowercase
+  | "Strip trailing semicolons (2011 import artefact)"
+  | validate_email
+  | warn_if_invalid
+}
+
+// Phone normalisation toward E.164. 19 distinct formats found; ~2% expected to
+// need manual rework (Offene Punkte #4).
+transform to_phone_e164 {
+  "Normalise to E.164 (+49…); ~2% need manual rework"
+  | to_e164
+  | warn_if_invalid
+}
+
+// Consent inversion — ATLAS stores opt-IN, Salesforce stores opt-OUT.
+//! HIGH RISK: built wrong twice (Testlauf 1+2). No consent (blank) = opt-out.
+transform consent_to_optout {
+  map { J: false, N: true, null: true }
+}

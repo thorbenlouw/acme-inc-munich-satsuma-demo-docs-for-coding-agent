@@ -1,0 +1,78 @@
+import { sf::opportunity, sf::account } from "salesforce.stm"
+import { order_status_map } from "lookups.stm"
+
+note {
+  """
+  **AUFTRAEGE → Salesforce Opportunity**
+  Source: ATLAS PostgreSQL, table AUFTRAEGE (~2.4M rows).
+
+  Open scope question: migrate pre-2015 history? 2.4M rows, DM currency before
+  2002 (Offene Punkte #7 — steering-committee escalation). AUFTRAG_POS line items
+  (9.1M rows) have an unresolved SF data model.
+  """
+}
+
+namespace atlas {
+  schema auftraege (
+    note "ATLAS orders — header level; maps to Opportunity",
+    retention "Source system; pre-2015 migration scope unresolved"
+  ) {
+    AUF_NR        INT            (pk, note "Order number — External ID")
+    KD_NR         INT (note "FK to kunden.KD_NR — resolves to Account")
+    AUF_DATUM     DATE (required, note "Order date; pre-2002 = DM era")
+    WAEHRUNG      CHAR(3) (
+      note "Currency — mostly EUR; 'DM' on 184,220 legacy rows"
+    )
+    GESAMT_NETTO  DECIMAL(12,2)  (note "Net total — see currency caveat")
+    STATUS_KZ     CHAR(2) (
+      note "Order status code — 14 values, 3 undocumented (77/88/…)"
+    )
+    STORNO_KZ     CHAR(1) (
+      note "Cancellation flag — filter or map to Closed Lost? UNRESOLVED"
+    )
+    VERTRETER_NR  INT (
+      note "Sales rep — maps to SF user via HR table; employee data (Betriebsrat)"
+    )
+    LIEF_DATUM    DATE           (note "Delivery date")
+    RABATT_PROZ   DECIMAL(5,2) (
+      note "Discount % — routed to Billing (not migrated here)"
+    )
+  }
+
+  // AUFTRAG_POS — order line items (9.1M rows). SF model unresolved (Markus).
+  //? OpportunityLineItem vs aggregate? Data-model decision pending. ARTIKEL_NR → Product2 lookup.
+  schema auftrag_pos (
+    note "ATLAS order line items — 1:n per order; SF target model UNRESOLVED (9.1M rows)",
+    retention "Source system"
+  ) {
+    POS_NR      VARCHAR(40)  (pk)
+    AUF_NR      VARCHAR(40)  (note "FK to auftraege.AUF_NR")
+    ARTIKEL_NR  VARCHAR(40)  (note "→ Product2 lookup")
+    MENGE       VARCHAR(40)  (note "Quantity")
+    EPREIS      VARCHAR(40)  (note "Unit price — see WAEHRUNG")
+    MWST_KZ     VARCHAR(40)  (note "VAT code — drop?")
+    POS_TEXT    VARCHAR(40)  (note "Free text — migrate?")
+    LIEFER_KW   VARCHAR(40) (note "Delivery week, format 'KW 12/2025' — parse?")
+  }
+}
+
+mapping auftraege_to_opportunity {
+  source {
+    atlas::auftraege,
+    sf::account
+  }
+  target { sf::opportunity }
+
+  AUF_NR -> ATLAS_Order_No__c { "1:1 external ID" }
+  KD_NR, sf::account -> AccountId {
+    "Lookup to @sf::opportunity.AccountId via @sf::account.ATLAS_ID__c"
+  }
+  AUF_DATUM -> CloseDate { "1:1" }  //? pre-2002 dates are DM era — check amounts
+  WAEHRUNG -> CurrencyIsoCode { "1:1" }  //! 'DM' on 184,220 rows — enable SF multi-currency + DM→EUR? (Offene Punkte #7)
+  GESAMT_NETTO -> Amount { "1:1 — but see @WAEHRUNG (DM→EUR for legacy rows)" }
+  STATUS_KZ -> StageName { ...order_status_map }  //? codes 77 (×1,871) & 88 (×412) undocumented (Offene Punkte #10)
+  VERTRETER_NR -> OwnerId { "Map ATLAS rep → SF user via HR table" }  //? employee personal data — Betriebsrat (Offene Punkte #12)
+  LIEF_DATUM -> Delivery_Date__c { "1:1" }
+  //? Opportunity.Name has no source field — derivation TBD (e.g. "@AUF_NR + customer name")
+  //? STORNO_KZ — filter cancelled orders out, or map to StageName 'Closed Lost'? UNRESOLVED
+}

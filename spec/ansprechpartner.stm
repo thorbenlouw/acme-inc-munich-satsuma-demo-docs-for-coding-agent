@@ -1,0 +1,80 @@
+import { sf::contact, sf::account } from "salesforce.stm"
+import { salutation_map, email_cleanse, to_phone_e164, consent_to_optout } from "lookups.stm"
+
+note {
+  """
+  **ANSPRECHPARTNER → Salesforce Contact**
+  Source: ATLAS PostgreSQL, table ANSPRECHPARTNER (102,557 rows).
+
+  Contact persons linked to a customer (KD_NR → Account). Same salutation and
+  consent-inversion rules as KUNDEN. GEBURTSTAG is deliberately not migrated
+  (data minimisation, Dr. Weber 05.03.).
+  """
+}
+
+namespace atlas {
+  schema ansprechpartner (
+    note "ATLAS contact persons — linked to a customer via KD_NR",
+    retention "Source system; birthday (GEBURTSTAG) not migrated (minimisation)"
+  ) {
+    AP_NR             INT           (pk, note "Contact number — External ID")
+    KD_NR             INT (note "FK to kunden.KD_NR — resolves to Account")
+    ANREDE            CHAR(1) (
+      note "Salutation — same list as KUNDEN ('X' also appears)"
+    )
+    VORNAME           VARCHAR(40)   (pii)
+    NACHNAME          VARCHAR(60) (
+      pii,
+      required,
+      note "211 rows blank — SF LastName is mandatory"
+    )
+    FUNKTION          VARCHAR(40)   (pii, note "Job title — free text")
+    ABTEILUNG         VARCHAR(40)   (note "Department")
+    EMAIL             VARCHAR(120) (
+      pii,
+      format email,
+      note "Same semicolon artefact as KUNDEN.EMAIL"
+    )
+    TEL_DURCHWAHL     VARCHAR(20) (
+      pii,
+      note "Direct dial — may need company-number prefix"
+    )
+    MOBIL             VARCHAR(40)   (pii)
+    NEWSLETTER_KZ     CHAR(1) (
+      note "Newsletter consent (opt-IN) — INVERTED to opt-OUT"
+    )
+    GEBURTSTAG        DATE (
+      pii,
+      note "NOT migrated — data minimisation (Dr. Weber 05.03.); ATLAS deletion ticket"
+    )
+    AUSGESCHIEDEN_KZ  CHAR(1) (
+      note "Left-the-company flag — migrate for history or filter? UNRESOLVED"
+    )
+    LETZTER_KONTAKT   DATE          (note "Last contact date")
+  }
+}
+
+mapping ansprechpartner_to_contact {
+  source {
+    atlas::ansprechpartner,
+    sf::account
+  }
+  target { sf::contact }
+
+  AP_NR -> ATLAS_AP_ID__c { "1:1 external ID" }
+  KD_NR, sf::account -> AccountId {
+    "Lookup to @sf::contact.AccountId via @sf::account.ATLAS_ID__c"
+  }
+  ANREDE -> Salutation { ...salutation_map }
+  VORNAME -> FirstName { trim }
+  NACHNAME -> LastName { trim }  //? 211 blank rows → 'Unbekannt'? SF LastName mandatory (Offene Punkte open)
+  FUNKTION -> Title { "1:1 free text" }
+  ABTEILUNG -> Department { "1:1" }
+  EMAIL -> Email { ...email_cleanse }
+  TEL_DURCHWAHL -> Phone { ...to_phone_e164 }  //? append direct-dial to company number? format TBD
+  MOBIL -> MobilePhone { ...to_phone_e164 }
+  //! HIGH RISK: same consent inversion as KUNDEN.WERBUNG_OK — J→false, N→true, blank→true.
+  NEWSLETTER_KZ -> HasOptedOutOfEmail { ...consent_to_optout }
+  LETZTER_KONTAKT -> Last_Activity_Legacy__c { "1:1" }
+  //? AUSGESCHIEDEN_KZ — migrate ex-contacts for sales history, or filter them out? Vertrieb vs DSGVO (Offene Punkte open)
+}
