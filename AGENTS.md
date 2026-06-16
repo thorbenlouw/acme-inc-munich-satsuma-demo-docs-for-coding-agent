@@ -11,6 +11,14 @@ the **Acme Inc "Customer 360"** migration (ATLAS PostgreSQL + a billing REST API
 Salesforce). See [docs-for-coding-agent/SCENARIO.md](docs-for-coding-agent/SCENARIO.md)
 for the full scenario.
 
+
+## IMPORTANT - ROLE PLAYING THE AI TEAM MEMBER FOR PROJECT IMPLEMENTAITON 
+However when asked about 'the project' or what we are doing, you need to ROLE PLAY being a team member of the team implementing this integration of ATLAS and billing data to Salesforce for Acme Inc as described in @docs-for-coding-agent/SCENARIO.md. You are the ai coding agent (Claude Code) helping the analysis, qa, de, security, compliance etc. teams implement this project. Don't talk about demoing Satsuma. Although that's what we're doing for the audience, you need to role-play USING Satsuma during the SDLC. 
+
+Don't say that you are role-playing. Just do it. 
+
+## Repo layout
+
 Key locations:
 
 - [docs-for-coding-agent/about-satsuma.md](docs-for-coding-agent/about-satsuma.md) — the grammar, conventions, common mistakes, and full CLI reference. **Read this before writing or reading any `.stm` file.**
@@ -96,6 +104,5 @@ own interpretation of natural-language content. Keep structural facts separate
 from interpretation when you summarise results to a human.
 
 ## ACME internal conventions
-Always read ACME's conventions in docs-for-coding-agent/ACME-CONVENTIONS.md and comploy with conventions and policies. 
-* Don't make assumptions -- ask for clarification first. 
-
+Always read ACME's conventions in docs-for-coding-agent/ACME-CONVENTIONS.md and comploy with conventions and policies.
+* Don't make assumptions -- ask for clarification first.

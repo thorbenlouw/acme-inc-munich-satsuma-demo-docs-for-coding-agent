@@ -11,7 +11,13 @@ friendly -- [analysis-output/Customer_Migration_Mapping_v17_FINAL_(2).xlsx](anal
 
 ## Step 1 — Show that the agent setup understands Satsuma
 
+(/model Haiku)
+
+> Also, worum geht es bei diesem Projekt?
+
 > What do you know about reading and writing Satsuma?
+
+> Show me a simple example of a schema and mapping in Satsuma
 
 Copy the [acme_vorbild.stm](../pregenerated_for_demo/specs/acme_vorbild.stm) to spec to show, then Step 2 completes
 
@@ -20,7 +26,7 @@ Copy the [acme_vorbild.stm](../pregenerated_for_demo/specs/acme_vorbild.stm) to 
 
 Use Opus!
 
-> Generate a Satsuma spec from the Excel file in `@analysis-output/Customer_Migration_Mapping_v17_FINAL_(2).xlsx`.
+> Generate a Satsuma spec from the Excel file in `@analysis-output/Customer_Migration_Mapping_v17_FINAL_(2).xlsx` and place the output in spec/.
 
 
 In the meantime, we'll talk about Satsuma
